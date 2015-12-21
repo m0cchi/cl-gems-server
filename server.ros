@@ -1,0 +1,46 @@
+#!/bin/sh
+#|-*- mode:lisp -*-|#
+#|
+exec ros -Q -- $0 "$@"
+|#
+(ql:quickload :http-ink)
+(ql:quickload :local-time)
+(ql:quickload :trivial-mimes)
+
+(defun read-file (path)
+  (with-open-file (stream path :direction :input :element-type '(unsigned-byte 8))
+                  (let ((buf (make-array (file-length stream) :element-type '(unsigned-byte 8))))
+                    (read-sequence buf stream)
+                    buf)))
+
+(defun connection (env)
+  (let* ((header (getf env :header))
+        (is-keep-alive (http-ink:is-keep-alive header)))
+    (if is-keep-alive
+        "keep-alive"
+      "close")))
+
+(defun response-with-file (env path)
+  (let ((file (read-file path)))
+    (list :header (list "HTTP/1.1" "200 OK"
+                        :date (local-time:format-rfc1123-timestring nil 
+                                                                    (local-time:universal-to-timestamp (get-universal-time)))
+                        :server "http-ink"
+                        :connection (connection env)
+                        :content-type (format nil "~A~:[~;~:*; charset=~A~]"
+                                              (trivial-mimes:mime path) "utf-8")
+                        :content-length (length file))
+          :body file
+          :body-is-vector T)))
+
+(http-ink:defroutes
+ (:get "/README" () (response-with-file http-ink::env "README.md"))
+ (:get "/index.html" () (response-with-file http-ink::env "index.html"))
+ (:get "/" () (response-with-file http-ink::env "index.html")))
+
+(defun main (&rest argv)
+  (declare (ignorable argv))
+  (let* ((server (toy-gun:make-server :port 38080 :address "0.0.0.0")))
+    (setq toy-gun:*cartridge* #'http-ink:ink)
+    (toy-gun:start server)
+    (toy-gun:dispose server)))
